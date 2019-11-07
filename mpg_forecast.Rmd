@@ -1,0 +1,42 @@
+---
+title: "Fuel Economy Forecast"
+output: html_document
+---
+
+Ok, so. This may be a futile exercise. But, we just really need SOME idea of how MPGs have evolved for light, heavy, and medium fleet vehicles over the past several years. I just need a BAU estimate for the fleet action plan. Of course, I will exponenitally decay this function such that the cars do not get supremely efficient. However, what we currrently have is not sufficient in my view, because it is not founded in anything. We have absolutely no idea how much more efficienct vehicles might actually get in the aggregate. 
+
+By forecasting with aggregate statistics, we avoid violating simple rules for statistical inference. 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidypredict)
+library(tidyquant)
+library(tidyverse)
+library(magrittr)
+library(curl)
+
+```
+
+## R data loading and manip
+
+
+```{r cars}
+url<-"https://www.fueleconomy.gov/feg/epadata/vehicles.csv.zip"
+tmp<-tempfile()
+download.file(url,dest=tmp)
+data<-read_csv(unz(tmp,"vehicles.csv"))
+
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
