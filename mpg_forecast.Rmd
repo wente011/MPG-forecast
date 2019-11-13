@@ -212,8 +212,14 @@ gg6<-test %>% ggplot(aes(x=YEAR,y=mpg,color=SEGMENT,size=MILES_TRAVELED)) + geom
 
 fit<-lm(log(mpg)~YEAR*FUEL_TYPE + SEGMENT + FUEL_TYPE,data=fmpg)
 fit2<-lm(log(mpg)~YEAR*FUEL_TYPE + SEGMENT + FUEL_TYPE,data=fmpg)   #statistical evidence for an interaction term. 
+fit3<-lm(log(mpg)~YEAR*FUEL_TYPE*SEGMENT,data=fmpg)  #statistical evidence for a threeway interaction term. 
+
+anova(fit2,fit3)  #statistical evidence for an interaction term. 
+
 
 fmpg$SEGMENT %<>% as.factor()
+
+
 fmpg$FUEL_TYPE %<>% as.factor()
 
 newdata2<-seq(2018,2030) %>% enframe() %>% select(value) %>% mutate(YEAR=as.factor(value)) %>% select(YEAR)
@@ -221,11 +227,13 @@ newdata2<-seq(2018,2030) %>% enframe() %>% select(value) %>% mutate(YEAR=as.fact
 newdata2<-expand.grid(newdata2$YEAR,levels(fmpg$SEGMENT),levels(fmpg$FUEL_TYPE)) %>% rename(YEAR=Var1,SEGMENT=Var2,FUEL_TYPE=Var3) 
 newdata2$YEAR %<>% as.character %>% as.numeric()
 
-fcast<-predict(fit2,newdata2)
+fcast<-predict(fit3,newdata2)
 
 newdata2$preds<-exp(fcast)
 newdata2 %<>% group_by(FUEL_TYPE,SEGMENT) %>% mutate(mpg.lagpct = (preds - lag(preds))/lag(preds)) %>% ungroup()
 write.csv(newdata2,"mpg_trend.csv")
+
+
 
 ```
 
