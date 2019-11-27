@@ -14,8 +14,11 @@ library(tidypredict)
 library(readxl)
 library(tidyquant)
 library(tidyverse)
+library(modelr)
+library(ggpubr)
 library(magrittr)
 library(curl)
+library(tidypredict)
 
 library(gridExtra)
 library(scales)
@@ -154,16 +157,12 @@ arima_sim<-function(nsim,data,h){
             x<-simulate(fit,h,future=T,bootstrap=T)   %>% as.vector() %>% tibble() %>% mutate(year=seq(2019,length.out = h)) %>%   mutate(run=i)
            names(x)<-c(paste0("output"),"year","run")
           lis[[i]]<-x
-   
        }
         afn<-bind_rows(lis) #%>% gather(runs)   #This works pretty good now.
             return(afn)
       }
 
 test<-arima_sim(nsim=1000,data=mods,h=20)
-
-
-
 
 
 
@@ -201,18 +200,54 @@ The analysis of the national data is interesting. It's a reasonable forecast. Bu
 For the most part, we should only assume BAU reductions for the light fleet, probably gas only. 
 
 ```{r fleet mpg}
-fmpg<-read_excel("fleetmpg.xlsx")
+fmpg<-read_excel("fleetmpg.xlsx") %>% mutate(zfac2=paste0(FUEL_TYPE,"-",SEGMENT)) %>% filter(YEAR>1999)
 
+z_fun<-function(x){
+  z=(x-mean(x,na.rm=T))/sd(x,na.rm=T)
+}
+
+
+
+fmpg$zpg2<-ave(fmpg$mpg,fmpg$zfac2,FUN=z_fun)
+
+fit<-lm(zpg2~YEAR + SEGMENT,data=fmpg)
 #fmpg<- 
   
-fmpg<-fmpg %>% dplyr::filter(SEGMENT != "Off", mpg > 0, mpg < 60,  zpg < 2.5, zpg > -2.5) %>% group_by(SEGMENT,YEAR,FUEL_TYPE) %>% summarize_at(c("mpg","MILES_TRAVELED"),mean,na.rm=T)
+fmpg$mpg[fmpg$mpg<0]<-NA
+#fmpg<-fmpg %>% dplyr::filter(SEGMENT != "Off", mpg > 0, mpg < 60) %>% group_by(SEGMENT,YEAR,FUEL_TYPE) %>% summarize_at(c("mpg","MILES_TRAVELED"),mean,na.rm=T)
 
-gg6<-test %>% ggplot(aes(x=YEAR,y=mpg,color=SEGMENT,size=MILES_TRAVELED)) + geom_point()
+agpl<-function(agency_list,data){
+  liss<-list()
+  for (i in 1:length(agency_list)){
+ liss[[i]]<- data %>% filter(AgencyName == agency_list[i],mpg>0,mpg<60,YEAR<2019,YEAR>1989,abs(zpg2)<3.5,SEGMENT != "Off") %>%          ggplot(aes(x=YEAR,y=log(mpg),color=SEGMENT)) + geom_point(alpha=0.1) + geom_smooth(method="lm",se=T) + ggtitle(paste0(agency_list[i]))
+  }
+  return(liss)
+  }
+
+agnames<-fmpg$AgencyName %>% as.factor() %>% levels()
+
+ggs<-agpl(agency_list=agnames,data=fmpg)
+
+fmpg$AgencyName %<>% as.factor()
+
+gg6<-fmpg %>% filter(mpg>0,mpg<60,YEAR<2019,YEAR>1989, SEGMENT == "Light")  %>% 
+ggscatter(.,x = "YEAR", y = "mpg", add = "reg.line",size=2,alpha=0.1) +
+  stat_cor(label.x = 2000, label.y = 40) + 
+  stat_regline_equation(label.x = 2000, label.y = 55) + geom_point(alpha=0.1) + facet_wrap( ~ AgencyName, nrow = 6) +
+  ggtitle("MPG trends by Year (Light Fleet)")
 
 
-fit<-lm(log(mpg)~YEAR*FUEL_TYPE + SEGMENT + FUEL_TYPE,data=fmpg)
-fit2<-lm(log(mpg)~YEAR*FUEL_TYPE + SEGMENT + FUEL_TYPE,data=fmpg)   #statistical evidence for an interaction term. 
-fit3<-lm(log(mpg)~YEAR*FUEL_TYPE*SEGMENT,data=fmpg)  #statistical evidence for a threeway interaction term. 
+
+gg7<-fmpg %>% filter(mpg>0,mpg<60,YEAR<2019,YEAR>1989, SEGMENT == "Light")  %>% group_by(AgencyName) %>% mutate(share.miles=(MILES_TRAVELED)/sum(MILES_TRAVELED)) %>% ungroup() %>% mutate(wmpg=(share.miles*mpg)) %>%
+ggscatter(.,x = "YEAR", y = "wmpg", add = "reg.line",size=2,alpha=0.1) +
+  stat_cor(label.x = 2000, label.y = 40) + 
+  stat_regline_equation(label.x = 2000, label.y = 55) + geom_point(alpha=0.1) + facet_wrap( ~ AgencyName, nrow = 6) +
+  ggtitle("Weighted MPG trends by Year (Light Fleet)")
+gg7
+
+
+
+
 
 anova(fit2,fit3)  #statistical evidence for an interaction term. 
 
@@ -232,6 +267,83 @@ fcast<-predict(fit3,newdata2)
 newdata2$preds<-exp(fcast)
 newdata2 %<>% group_by(FUEL_TYPE,SEGMENT) %>% mutate(mpg.lagpct = (preds - lag(preds))/lag(preds)) %>% ungroup()
 write.csv(newdata2,"mpg_trend.csv")
+
+
+
+```
+
+## METC fleet data
+```{r METC models}
+metc<-read_excel("metcfleet.xlsx") %>% mutate(mpg=MILES_TRAVELED/`Total Raw Gallons`) %>% mutate(Year=year(FromDate)) %>% filter(Year==2018)
+
+
+############ METC models
+hv_mod<-function(df){
+fit<-lm(mpg~YEAR,data=df)  
+}
+
+add_preds2<-function(.x,.y){
+ data2<-add_predictions(data=.x,model=.y,var="pred")
+  }
+
+
+mods<-metc %>% filter(mpg>0,mpg<60, SEGMENT %in% c("Heavy"),USING_DEPT_NO_DESC %in% c("MT Non-Revenue","MT Revenue","MTS")) %>% group_by(USING_DEPT_NO_DESC) %>% nest() %>% mutate(lms=map(data,hv_mod)) %>% mutate(tidylms=map(lms,tidy)) 
+mods2<-mods %>% group_by(USING_DEPT_NO_DESC)  %>% do(augment(.$lms[[1]],newdata=.$data[[1]])) 
+  
+  
+ggs<-mods2 %>%  ggplot(aes(YEAR, mpg)) + 
+  geom_point(shape = 1,aes(text=MODEL)) + 
+  geom_ribbon(aes(YEAR, 
+                  ymin = .fitted-1.96*.se.fit, 
+                  ymax = .fitted+1.96*.se.fit),
+              alpha = 0.5, fill = "black") +
+  geom_line(aes(YEAR, .fitted), size = 1, color = "red") + scale_x_continuous("Year",breaks=seq(1990,2018,2)) +
+  facet_wrap(~USING_DEPT_NO_DESC) + theme(axis.text.x = element_text(angle=90))
+  
+
+ggs<-mods2 %>%  ggplot(aes(as.factor(YEAR), mpg)) + 
+  geom_point(shape = 1,aes(text=MODEL)) + geom_violin() +  stat_summary(fun.y=median, geom="point", size=1, color="red") + 
+  #geom_ribbon(aes(YEAR, 
+ #                 ymin = .fitted-1.96*.se.fit, 
+ #                 ymax = .fitted+1.96*.se.fit),
+#              alpha = 0.5, fill = "black") +
+#  geom_line(aes(YEAR, .fitted), size = 1, color = "red") + scale_x_continuous("Year",breaks=seq(1990,2018,2)) +
+  facet_wrap(~USING_DEPT_NO_DESC) + theme(axis.text.x = element_text(angle=90)) + scale_y_continuous(breaks=seq(0,12.5,1))
+
+ggs<- ggs %>% ggplotly()
+
+htmlwidgets::saveWidget(as_widget(ggs), "metcMPG.html")
+
+
+```
+
+
+```{r METC graphing}
+
+gg.metc<-metc %>% filter(mpg>0,mpg<60, SEGMENT %in% c("Heavy"),USING_DEPT_NO_DESC %in% c("MT Non-Revenue","MT Revenue","MTS"))  %>% 
+  ggscatter(.,x = "YEAR", y = "mpg", add = "reg.line",size=2,alpha=0.1) + geom_point(aes(x=YEAR,y=mpg,color=USING_DEPT_NO_DESC,text=MODEL)) + 
+    stat_cor(label.x = 1990, label.y = 10) + 
+        stat_regline_equation(label.x = 1990, label.y = 11) + geom_point(alpha=0.1) +
+          ggtitle("MPG trends by Model Year (METC Heavy Fleet)")  +  theme_economist() + scale_colour_tableau() +     scale_y_continuous("MPG",breaks=seq(0,12.5,2)) + scale_x_continuous(breaks=seq(1990,2019,1))
+gg.metc
+
+
+gg.metc2<-res %>% ggplot(aes(x=YEAR,y=mpg,color=USING_DEPT_NO_DESC)) + geom_point()  + geom_line(aes(x=YEAR,y=pred,color=USING_DEPT_NO_DESC))
+
+  
+  
+gg.metc<-metc %>% filter(mpg>0,mpg<60, SEGMENT %in% c("Heavy"),USING_DEPT_NO_DESC %in% c("MT Non-Revenue","MT Revenue","MTS"))  %>% 
+  ggscatter(.,x = "YEAR", y = "mpg", add = "reg.line",size=2,alpha=0.1) + geom_point(aes(x=YEAR,y=mpg,color=USING_DEPT_NO_DESC,text=MODEL)) + 
+    stat_cor(label.x = 1990, label.y = 10) + 
+        stat_regline_equation(label.x = 1990, label.y = 11) + geom_point(alpha=0.1) +
+          ggtitle("MPG trends by Model Year (METC Heavy Fleet)")  +  theme_economist() + scale_colour_tableau() +     scale_y_continuous("MPG",breaks=seq(0,12.5,2)) + scale_x_continuous(breaks=seq(1990,2019,1))
+gg.metc
+
+
+
+gg.metc2<-metc %>% filter(mpg>0,mpg<60, SEGMENT %in% c("Heavy"),USING_DEPT_NO_DESC %in% c("MT Non-Revenue","MT Revenue","MTS"))  %>% ggplot(aes(x=YEAR,y=mpg,label=MODEL))+ geom_point(aes(color=USING_DEPT_NO_DESC)) + geom_smooth(method="lm",se=T)  + scale_x_continuous(breaks=seq(1990,2019,1),"Model Year") + scale_y_continuous(breaks=seq(0,1,0.05),"MPG") 
+
+gg.pmetc<-gg.metc2 %>% ggplotly()
 
 
 
